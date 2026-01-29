@@ -13,12 +13,20 @@ const streamToggle = document.getElementById("streamToggle");
 const copyBtn = document.getElementById("copyBtn");
 const downloadBtn = document.getElementById("downloadBtn");
 const clearBtn = document.getElementById("clearBtn");
+const locateBtn = document.getElementById("locateBtn");
 const latencyNote = document.getElementById("latencyNote");
 const scrollToUpload = document.getElementById("scrollToUpload");
 const loadSample = document.getElementById("loadSample");
+const groundingModal = document.getElementById("groundingModal");
+const closeGrounding = document.getElementById("closeGrounding");
+const groundingImage = document.getElementById("groundingImage");
+const groundingBoxes = document.getElementById("groundingBoxes");
+const groundingList = document.getElementById("groundingList");
 
 let currentImage = null;
 let currentFilename = "ocr-result.md";
+let groundingItems = [];
+let activeGroundingIndex = -1;
 
 const statusMap = {
   idle: "就绪",
@@ -35,6 +43,7 @@ function setStatus(state) {
 
 function setOutput(text) {
   output.textContent = text || "";
+  refreshGroundingState();
 }
 
 function setPreview(dataUrl) {
@@ -51,6 +60,301 @@ function setPreview(dataUrl) {
     return;
   }
   previewPanel.innerHTML = `<img class="preview" src="${dataUrl}" alt="OCR 预览" />`;
+}
+
+function parseGroundingBlocks(text) {
+  if (!text) return [];
+  const regex =
+    /<\|ref\|>([\s\S]*?)<\|\/ref\|>\s*<\|det\|>\s*\[\[(.*?)\]\]\s*<\|\/det\|>/g;
+  const matches = [];
+  let match;
+
+  while ((match = regex.exec(text)) !== null) {
+    matches.push({
+      start: match.index,
+      end: regex.lastIndex,
+      ref: match[1].trim(),
+      det: match[2].trim(),
+    });
+  }
+
+  return matches
+    .map((item, index) => {
+      const nextStart = matches[index + 1]?.start ?? text.length;
+      const tail = text.slice(item.end, nextStart);
+      const line =
+        tail
+          .split("\n")
+          .map((value) => value.trim())
+          .find((value) => value.length > 0) || "";
+      const coords = item.det
+        .split(/[,\s]+/)
+        .filter((value) => value.length > 0)
+        .map((value) => Number.parseFloat(value))
+        .filter((value) => Number.isFinite(value));
+      if (coords.length < 4) {
+        return null;
+      }
+      return {
+        label: item.ref || "text",
+        text: line || item.ref || "识别文本",
+        coords,
+      };
+    })
+    .filter(Boolean);
+}
+
+function refreshGroundingState() {
+  groundingItems = parseGroundingBlocks(output.textContent || "");
+  locateBtn.disabled = !currentImage || groundingItems.length === 0;
+  if (groundingItems.length === 0) {
+    activeGroundingIndex = -1;
+  }
+}
+
+function getCoordBounds(items) {
+  let maxX = 0;
+  let maxY = 0;
+  items.forEach((item) => {
+    const coords = item.coords || [];
+    for (let i = 0; i < coords.length; i += 2) {
+      const x = coords[i];
+      const y = coords[i + 1];
+      if (Number.isFinite(x)) maxX = Math.max(maxX, x);
+      if (Number.isFinite(y)) maxY = Math.max(maxY, y);
+    }
+  });
+  return { maxX, maxY };
+}
+
+function computeMapping(items, imageWidth, imageHeight) {
+  const { maxX, maxY } = getCoordBounds(items);
+  const maxVal = Math.max(maxX, maxY);
+  if (!maxVal || !imageWidth || !imageHeight) {
+    return { mode: "direct", baseSize: null, padX: 0, padY: 0, scale: 1 };
+  }
+
+  let spaceType = "pixel";
+  if (maxVal <= 1.5) {
+    spaceType = "normalized";
+  } else if (maxVal <= 100) {
+    spaceType = "percent";
+  } else if (maxVal <= 1200) {
+    spaceType = "bins1000";
+  }
+
+  const coordAspect = maxY ? maxX / maxY : 1;
+  const imageAspect = imageWidth / imageHeight;
+  const coordIsSquare = Math.abs(coordAspect - 1) <= 0.15;
+  const imageIsSquare = Math.abs(imageAspect - 1) <= 0.2;
+  const shouldLetterbox = coordIsSquare && !imageIsSquare;
+
+  let baseSize = maxVal;
+  if (spaceType === "normalized") {
+    baseSize = 1;
+  } else if (spaceType === "percent") {
+    baseSize = 100;
+  } else if (spaceType === "bins1000") {
+    baseSize = 1000;
+  } else {
+    const candidates = [512, 640, 768, 896, 1024, 1280, 1536, 2048];
+    baseSize = candidates.find((size) => size >= maxVal) || maxVal;
+  }
+
+  let padX = 0;
+  let padY = 0;
+  let scale = 1;
+  if (shouldLetterbox) {
+    if (imageWidth >= imageHeight) {
+      scale = baseSize / imageWidth;
+      const resizedHeight = imageHeight * scale;
+      padY = (baseSize - resizedHeight) / 2;
+    } else {
+      scale = baseSize / imageHeight;
+      const resizedWidth = imageWidth * scale;
+      padX = (baseSize - resizedWidth) / 2;
+    }
+  }
+
+  return { mode: shouldLetterbox ? "letterbox" : "direct", baseSize, padX, padY, scale, spaceType };
+}
+
+function updateGroundingBoxes() {
+  if (!groundingImage.complete || !groundingItems.length) return;
+  const mapping = computeMapping(
+    groundingItems,
+    groundingImage.naturalWidth,
+    groundingImage.naturalHeight
+  );
+  const scaleX = groundingImage.clientWidth / groundingImage.naturalWidth;
+  const scaleY = groundingImage.clientHeight / groundingImage.naturalHeight;
+  const boxes = groundingBoxes.querySelectorAll(".grounding-box");
+
+  groundingItems.forEach((item, index) => {
+    const box = boxes[index];
+    if (!box) return;
+    const coords = item.coords;
+    const boxCoords = normalizeBoxCoords(
+      coords,
+      groundingImage.naturalWidth,
+      groundingImage.naturalHeight,
+      mapping
+    );
+    const left = boxCoords.x1 * scaleX;
+    const top = boxCoords.y1 * scaleY;
+    const width = (boxCoords.x2 - boxCoords.x1) * scaleX;
+    const height = (boxCoords.y2 - boxCoords.y1) * scaleY;
+    box.style.left = `${left}px`;
+    box.style.top = `${top}px`;
+    box.style.width = `${width}px`;
+    box.style.height = `${height}px`;
+  });
+}
+
+function normalizeBoxCoords(coords, imageWidth, imageHeight, mapping) {
+  let xs = [];
+  let ys = [];
+  if (coords.length >= 8) {
+    for (let i = 0; i < coords.length; i += 2) {
+      xs.push(coords[i]);
+      ys.push(coords[i + 1]);
+    }
+  } else {
+    const ax1 = coords[0];
+    const ay1 = coords[1];
+    const ax2 = coords[2];
+    const ay2 = coords[3];
+
+    const cand1 = {
+      x1: Math.min(ax1, ax2),
+      y1: Math.min(ay1, ay2),
+      x2: Math.max(ax1, ax2),
+      y2: Math.max(ay1, ay2),
+    };
+    const cand2 = {
+      x1: Math.min(ay1, ay2),
+      y1: Math.min(ax1, ax2),
+      x2: Math.max(ay1, ay2),
+      y2: Math.max(ax1, ax2),
+    };
+    const w1 = cand1.x2 - cand1.x1;
+    const h1 = cand1.y2 - cand1.y1;
+    const w2 = cand2.x2 - cand2.x1;
+    const h2 = cand2.y2 - cand2.y1;
+    const ratio1 = h1 > 0 ? w1 / h1 : 0;
+    const ratio2 = h2 > 0 ? w2 / h2 : 0;
+    const chosen = ratio1 >= ratio2 ? cand1 : cand2;
+    xs = [chosen.x1, chosen.x2];
+    ys = [chosen.y1, chosen.y2];
+  }
+  let x1 = Math.min(...xs);
+  let x2 = Math.max(...xs);
+  let y1 = Math.min(...ys);
+  let y2 = Math.max(...ys);
+
+  const maxVal = Math.max(x2, y2);
+  let baseSize = mapping?.baseSize;
+  let spaceType = mapping?.spaceType;
+
+  if (!spaceType) {
+    if (maxVal <= 1.5) {
+      spaceType = "normalized";
+      baseSize = 1;
+    } else if (maxVal <= 100) {
+      spaceType = "percent";
+      baseSize = 100;
+    } else if (maxVal <= 1200) {
+      spaceType = "bins1000";
+      baseSize = 1000;
+    } else {
+      spaceType = "pixel";
+      baseSize = maxVal;
+    }
+  }
+
+  if (mapping?.mode === "letterbox") {
+    if (spaceType === "normalized" || spaceType === "percent" || spaceType === "bins1000") {
+      x1 = (x1 / baseSize) * mapping.baseSize;
+      x2 = (x2 / baseSize) * mapping.baseSize;
+      y1 = (y1 / baseSize) * mapping.baseSize;
+      y2 = (y2 / baseSize) * mapping.baseSize;
+    }
+    x1 = (x1 - mapping.padX) / mapping.scale;
+    x2 = (x2 - mapping.padX) / mapping.scale;
+    y1 = (y1 - mapping.padY) / mapping.scale;
+    y2 = (y2 - mapping.padY) / mapping.scale;
+  } else if (spaceType === "normalized" || spaceType === "percent" || spaceType === "bins1000") {
+    x1 = (x1 / baseSize) * imageWidth;
+    x2 = (x2 / baseSize) * imageWidth;
+    y1 = (y1 / baseSize) * imageHeight;
+    y2 = (y2 / baseSize) * imageHeight;
+  }
+
+  return { x1, y1, x2, y2 };
+}
+
+function setActiveGrounding(index) {
+  activeGroundingIndex = index;
+  groundingList.querySelectorAll(".grounding-item").forEach((item, idx) => {
+    item.classList.toggle("active", idx === index);
+  });
+  groundingBoxes.querySelectorAll(".grounding-box").forEach((box, idx) => {
+    box.classList.toggle("active", idx === index);
+  });
+}
+
+function renderGroundingModal() {
+  groundingList.innerHTML = "";
+  groundingBoxes.innerHTML = "";
+
+  if (!groundingItems.length) {
+    groundingList.innerHTML = `<div class="grounding-empty">暂无定位标签输出，请使用“转 Markdown”并开启定位信息。</div>`;
+    return;
+  }
+
+  groundingItems.forEach((item, index) => {
+    const card = document.createElement("div");
+    card.className = "grounding-item";
+    const title = document.createElement("div");
+    title.className = "grounding-item-title";
+    title.textContent = item.label || "text";
+    const text = document.createElement("div");
+    text.className = "grounding-item-text";
+    text.textContent = item.text;
+    card.append(title, text);
+    card.addEventListener("click", () => {
+      setActiveGrounding(index);
+    });
+    groundingList.appendChild(card);
+
+    const box = document.createElement("div");
+    box.className = "grounding-box";
+    groundingBoxes.appendChild(box);
+  });
+
+  if (activeGroundingIndex >= 0) {
+    setActiveGrounding(activeGroundingIndex);
+  } else {
+    setActiveGrounding(0);
+  }
+}
+
+function openGroundingModal() {
+  if (locateBtn.disabled) return;
+  groundingModal.classList.add("open");
+  groundingModal.setAttribute("aria-hidden", "false");
+  document.body.classList.add("modal-open");
+  groundingImage.src = currentImage || "";
+  renderGroundingModal();
+  if (groundingImage.complete) {
+    updateGroundingBoxes();
+  }
+}
+
+function closeGroundingModal() {
+  groundingModal.classList.remove("open");
+  groundingModal.setAttribute("aria-hidden", "true");
+  document.body.classList.remove("modal-open");
 }
 
 function updateFileInfo(file) {
@@ -92,6 +396,7 @@ async function handleFile(file) {
     const dataUrl = await readFileAsDataUrl(file);
     currentImage = dataUrl;
     setPreview(dataUrl);
+    refreshGroundingState();
     setStatus("idle");
   } catch (err) {
     setStatus("error");
@@ -201,6 +506,7 @@ async function runStream(endpoint, payload) {
           output.textContent += json.response;
         }
         if (json.done) {
+          refreshGroundingState();
           return;
         }
       } catch (err) {
@@ -208,6 +514,8 @@ async function runStream(endpoint, payload) {
       }
     }
   }
+
+  refreshGroundingState();
 }
 
 function copyOutput() {
@@ -264,6 +572,20 @@ runBtn.addEventListener("click", runOCR);
 copyBtn.addEventListener("click", copyOutput);
 downloadBtn.addEventListener("click", downloadOutput);
 clearBtn.addEventListener("click", clearOutput);
+locateBtn.addEventListener("click", openGroundingModal);
+closeGrounding.addEventListener("click", closeGroundingModal);
+groundingModal.addEventListener("click", (event) => {
+  if (event.target?.dataset?.close) {
+    closeGroundingModal();
+  }
+});
+window.addEventListener("keydown", (event) => {
+  if (event.key === "Escape" && groundingModal.classList.contains("open")) {
+    closeGroundingModal();
+  }
+});
+groundingImage.addEventListener("load", updateGroundingBoxes);
+window.addEventListener("resize", updateGroundingBoxes);
 
 scrollToUpload.addEventListener("click", () => {
   document.getElementById("workspace").scrollIntoView({ behavior: "smooth" });
@@ -286,3 +608,4 @@ loadSample.addEventListener("click", async () => {
 setPrompt("<|grounding|>Convert the document to markdown.");
 setPreview(null);
 setStatus("idle");
+refreshGroundingState();

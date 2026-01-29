@@ -149,6 +149,7 @@
           <div class="output-actions">
             <button class="ghost" id="copyBtn">复制 Markdown</button>
             <button class="ghost" id="downloadBtn">下载 .md</button>
+            <button class="ghost" id="locateBtn">定位查看</button>
             <button class="ghost" id="clearBtn">清空结果</button>
           </div>
           <pre class="output" id="output">等待识别输出…</pre>
@@ -180,6 +181,33 @@
       <div>Powered by Ollama · deepseek-ocr</div>
       <div>私有部署 · 安全可控</div>
     </footer>
+
+    <div class="modal" id="groundingModal" aria-hidden="true">
+      <div class="modal-backdrop" data-close="true"></div>
+      <div class="modal-card" role="dialog" aria-modal="true" aria-labelledby="groundingTitle">
+        <div class="modal-header">
+          <div>
+            <h3 id="groundingTitle">定位查看</h3>
+            <p class="modal-sub">基于识别坐标高亮文档中的文本区域。</p>
+          </div>
+          <button class="icon-btn" id="closeGrounding" aria-label="关闭">×</button>
+        </div>
+        <div class="modal-body">
+          <div class="grounding-left">
+            <div class="grounding-canvas">
+              <div class="grounding-media">
+                <img id="groundingImage" alt="原图预览" />
+                <div class="grounding-boxes" id="groundingBoxes"></div>
+              </div>
+            </div>
+            <div class="grounding-legend">点击右侧结果可在图片中高亮对应区域。</div>
+          </div>
+          <div class="grounding-right">
+            <div class="grounding-list" id="groundingList"></div>
+          </div>
+        </div>
+      </div>
+    </div>
 
     <script src="app.js"></script>
   </body>
