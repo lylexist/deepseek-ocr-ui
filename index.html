@@ -1,0 +1,186 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Deepseek OCR - 文档识别</title>
+    <link rel="preconnect" href="https://fonts.googleapis.com" />
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+    <link
+      href="https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@300;400;500;600;700&display=swap"
+      rel="stylesheet"
+    />
+    <link rel="stylesheet" href="styles.css" />
+  </head>
+  <body>
+    <div class="bg-orbs" aria-hidden="true">
+      <span class="orb orb-1"></span>
+      <span class="orb orb-2"></span>
+      <span class="orb orb-3"></span>
+    </div>
+
+    <header class="topbar">
+      <div class="brand">
+        <div class="logo">OCR</div>
+        <div>
+          <div class="brand-title">Deepseek OCR Studio</div>
+          <div class="brand-sub">文档到 Markdown 的高精度提取</div>
+        </div>
+      </div>
+      <div class="status-pill" id="statusPill">就绪</div>
+    </header>
+
+    <main class="container">
+      <section class="hero">
+        <div class="hero-text">
+          <p class="eyebrow">Ollama · deepseek-ocr</p>
+          <h1>让文档瞬间可编辑、可结构化</h1>
+          <p class="lead">
+            将扫描件、截图或拍照文档快速转换为清晰的 Markdown。支持自定义指令、版式理解和图像解析。
+          </p>
+          <div class="hero-actions">
+            <button class="primary" id="scrollToUpload">立即识别</button>
+            <button class="ghost" id="loadSample">试试示例图</button>
+          </div>
+          <div class="hero-meta">
+            <div class="meta-card">
+              <div class="meta-title">低延迟推理</div>
+              <div class="meta-desc">通过局域网代理调用 Ollama</div>
+            </div>
+            <div class="meta-card">
+              <div class="meta-title">结构化输出</div>
+              <div class="meta-desc">Markdown + 版式信息</div>
+            </div>
+            <div class="meta-card">
+              <div class="meta-title">安全可控</div>
+              <div class="meta-desc">私有部署，不出网</div>
+            </div>
+          </div>
+        </div>
+        <div class="hero-panel">
+          <div class="panel-header">
+            <span>识别预览</span>
+            <span class="chip">live</span>
+          </div>
+          <div class="panel-body" id="previewPanel">
+            <div class="placeholder">
+              <div class="placeholder-icon"></div>
+              <div>
+                <div class="placeholder-title">拖拽或上传文档图片</div>
+                <div class="placeholder-desc">支持 PNG / JPG / WebP</div>
+              </div>
+            </div>
+          </div>
+        </div>
+      </section>
+
+      <section class="workspace" id="workspace">
+        <div class="card upload-card">
+          <div class="card-title">1. 上传文档</div>
+          <div class="dropzone" id="dropzone">
+            <input type="file" id="fileInput" accept="image/*" />
+            <div class="dropzone-inner">
+              <div class="dropzone-icon"></div>
+              <div>
+                <div class="dropzone-title">点击上传或拖拽文件</div>
+                <div class="dropzone-desc">建议 300 DPI 以上，提升识别率</div>
+              </div>
+            </div>
+          </div>
+          <div class="upload-meta">
+            <div>
+              <label class="field-label" for="endpointInput">Ollama 接口地址</label>
+              <input
+                id="endpointInput"
+                class="text-input"
+                type="url"
+                value="http://10.1.1.192"
+                placeholder="http://10.1.1.192"
+              />
+            </div>
+            <div>
+              <label class="field-label" for="modelInput">模型 ID</label>
+              <input
+                id="modelInput"
+                class="text-input"
+                type="text"
+                value="deepseek-ocr"
+                placeholder="deepseek-ocr"
+              />
+            </div>
+          </div>
+          <div class="file-info" id="fileInfo">尚未选择文件</div>
+        </div>
+
+        <div class="card prompt-card">
+          <div class="card-title">2. 指令与选项</div>
+          <div class="preset-grid" id="presetGrid">
+            <button class="preset" data-prompt="<|grounding|>Given the layout of the image.">
+              版式理解
+            </button>
+            <button class="preset" data-prompt="Free OCR.">通用 OCR</button>
+            <button class="preset" data-prompt="Parse the figure.">图表解析</button>
+            <button class="preset" data-prompt="Extract the text in the image.">
+              文本提取
+            </button>
+            <button class="preset" data-prompt="<|grounding|>Convert the document to markdown.">
+              转 Markdown
+            </button>
+          </div>
+          <label class="field-label" for="promptInput">自定义提示词</label>
+          <textarea
+            id="promptInput"
+            class="text-area"
+            rows="5"
+            placeholder="例如：<|grounding|>Convert the document to markdown."
+          ></textarea>
+          <div class="option-row">
+            <label class="toggle">
+              <input type="checkbox" id="streamToggle" checked />
+              <span class="toggle-track"></span>
+              <span class="toggle-label">流式输出</span>
+            </label>
+            <button class="primary" id="runBtn">开始识别</button>
+          </div>
+        </div>
+
+        <div class="card output-card">
+          <div class="card-title">3. OCR 结果</div>
+          <div class="output-actions">
+            <button class="ghost" id="copyBtn">复制 Markdown</button>
+            <button class="ghost" id="downloadBtn">下载 .md</button>
+            <button class="ghost" id="clearBtn">清空结果</button>
+          </div>
+          <pre class="output" id="output">等待识别输出…</pre>
+          <div class="footnote" id="latencyNote"></div>
+        </div>
+      </section>
+
+      <section class="tips">
+        <div class="tip-card">
+          <h3>最佳实践</h3>
+          <ul>
+            <li>确保图片清晰、光线均匀</li>
+            <li>对于复杂版式，优先使用“转 Markdown”</li>
+            <li>图表请使用“图表解析”提示词</li>
+          </ul>
+        </div>
+        <div class="tip-card">
+          <h3>提示词示例</h3>
+          <ul>
+            <li><code>&lt;|grounding|&gt;Convert the document to markdown.</code></li>
+            <li><code>Extract the text in the image.</code></li>
+            <li><code>Parse the figure.</code></li>
+          </ul>
+        </div>
+      </section>
+    </main>
+
+    <footer class="footer">
+      <div>Powered by Ollama · deepseek-ocr</div>
+      <div>私有部署 · 安全可控</div>
+    </footer>
+
+    <script src="app.js"></script>
+  </body>
+</html>
