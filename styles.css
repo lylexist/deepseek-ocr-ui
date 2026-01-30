@@ -554,6 +554,7 @@ img.preview {
   z-index: 1;
   width: min(1080px, 92vw);
   max-height: 85vh;
+  height: 85vh;
   background: rgba(255, 255, 255, 0.95);
   border-radius: 24px;
   border: 1px solid rgba(148, 163, 184, 0.35);
@@ -604,12 +605,16 @@ img.preview {
   grid-template-columns: minmax(0, 1.2fr) minmax(0, 1fr);
   gap: 18px;
   padding: 20px 22px 24px;
-  overflow: auto;
+  overflow: hidden;
+  flex: 1;
+  min-height: 0;
 }
 
 .grounding-left {
-  display: grid;
+  display: flex;
+  flex-direction: column;
   gap: 10px;
+  min-height: 0;
 }
 
 .grounding-canvas {
@@ -621,6 +626,8 @@ img.preview {
   display: grid;
   place-items: center;
   min-height: 280px;
+  flex: 1;
+  min-height: 0;
 }
 
 .grounding-media {
@@ -680,6 +687,8 @@ img.preview {
   display: flex;
   flex-direction: column;
   gap: 12px;
+  overflow: auto;
+  min-height: 0;
 }
 
 .grounding-list {
@@ -750,6 +759,11 @@ img.preview {
 
   .modal-body {
     grid-template-columns: 1fr;
+    overflow: auto;
+  }
+
+  .grounding-right {
+    overflow: visible;
   }
 
   #groundingImage {
