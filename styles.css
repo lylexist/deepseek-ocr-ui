@@ -571,6 +571,12 @@ img.preview {
   border-bottom: 1px solid var(--border);
 }
 
+.modal-actions {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
 .modal-header h3 {
   font-size: 18px;
 }
@@ -628,6 +634,21 @@ img.preview {
   max-height: 55vh;
   border-radius: 12px;
   display: block;
+}
+
+.modal-card:fullscreen {
+  width: 100vw;
+  height: 100vh;
+  max-height: none;
+  border-radius: 0;
+}
+
+.modal-card:fullscreen .modal-body {
+  height: calc(100vh - 76px);
+}
+
+.modal-card:fullscreen #groundingImage {
+  max-height: 72vh;
 }
 
 .grounding-boxes {

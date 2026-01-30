@@ -22,6 +22,7 @@ const closeGrounding = document.getElementById("closeGrounding");
 const groundingImage = document.getElementById("groundingImage");
 const groundingBoxes = document.getElementById("groundingBoxes");
 const groundingList = document.getElementById("groundingList");
+const fullscreenBtn = document.getElementById("fullscreenBtn");
 
 let currentImage = null;
 let currentFilename = "ocr-result.md";
@@ -65,7 +66,7 @@ function setPreview(dataUrl) {
 function parseGroundingBlocks(text) {
   if (!text) return [];
   const regex =
-    /<\|ref\|>([\s\S]*?)<\|\/ref\|>\s*<\|det\|>\s*\[\[(.*?)\]\]\s*<\|\/det\|>/g;
+    /<\|ref\|>([\s\S]*?)<\|\/ref\|>\s*<\|det\|>\s*(\[\[[\s\S]*?\]\])\s*<\|\/det\|>/g;
   const matches = [];
   let match;
 
@@ -87,18 +88,14 @@ function parseGroundingBlocks(text) {
           .split("\n")
           .map((value) => value.trim())
           .find((value) => value.length > 0) || "";
-      const coords = item.det
-        .split(/[,\s]+/)
-        .filter((value) => value.length > 0)
-        .map((value) => Number.parseFloat(value))
-        .filter((value) => Number.isFinite(value));
-      if (coords.length < 4) {
+      const boxes = parseDetBoxes(item.det);
+      if (!boxes.length) {
         return null;
       }
       return {
         label: item.ref || "text",
         text: line || item.ref || "识别文本",
-        coords,
+        boxes,
       };
     })
     .filter(Boolean);
@@ -112,93 +109,22 @@ function refreshGroundingState() {
   }
 }
 
-function getCoordBounds(items) {
-  let maxX = 0;
-  let maxY = 0;
-  items.forEach((item) => {
-    const coords = item.coords || [];
-    for (let i = 0; i < coords.length; i += 2) {
-      const x = coords[i];
-      const y = coords[i + 1];
-      if (Number.isFinite(x)) maxX = Math.max(maxX, x);
-      if (Number.isFinite(y)) maxY = Math.max(maxY, y);
-    }
-  });
-  return { maxX, maxY };
-}
-
-function computeMapping(items, imageWidth, imageHeight) {
-  const { maxX, maxY } = getCoordBounds(items);
-  const maxVal = Math.max(maxX, maxY);
-  if (!maxVal || !imageWidth || !imageHeight) {
-    return { mode: "direct", baseSize: null, padX: 0, padY: 0, scale: 1 };
-  }
-
-  let spaceType = "pixel";
-  if (maxVal <= 1.5) {
-    spaceType = "normalized";
-  } else if (maxVal <= 100) {
-    spaceType = "percent";
-  } else if (maxVal <= 1200) {
-    spaceType = "bins1000";
-  }
-
-  const coordAspect = maxY ? maxX / maxY : 1;
-  const imageAspect = imageWidth / imageHeight;
-  const coordIsSquare = Math.abs(coordAspect - 1) <= 0.15;
-  const imageIsSquare = Math.abs(imageAspect - 1) <= 0.2;
-  const shouldLetterbox = coordIsSquare && !imageIsSquare;
-
-  let baseSize = maxVal;
-  if (spaceType === "normalized") {
-    baseSize = 1;
-  } else if (spaceType === "percent") {
-    baseSize = 100;
-  } else if (spaceType === "bins1000") {
-    baseSize = 1000;
-  } else {
-    const candidates = [512, 640, 768, 896, 1024, 1280, 1536, 2048];
-    baseSize = candidates.find((size) => size >= maxVal) || maxVal;
-  }
-
-  let padX = 0;
-  let padY = 0;
-  let scale = 1;
-  if (shouldLetterbox) {
-    if (imageWidth >= imageHeight) {
-      scale = baseSize / imageWidth;
-      const resizedHeight = imageHeight * scale;
-      padY = (baseSize - resizedHeight) / 2;
-    } else {
-      scale = baseSize / imageHeight;
-      const resizedWidth = imageWidth * scale;
-      padX = (baseSize - resizedWidth) / 2;
-    }
-  }
-
-  return { mode: shouldLetterbox ? "letterbox" : "direct", baseSize, padX, padY, scale, spaceType };
-}
-
 function updateGroundingBoxes() {
   if (!groundingImage.complete || !groundingItems.length) return;
-  const mapping = computeMapping(
-    groundingItems,
-    groundingImage.naturalWidth,
-    groundingImage.naturalHeight
-  );
   const scaleX = groundingImage.clientWidth / groundingImage.naturalWidth;
   const scaleY = groundingImage.clientHeight / groundingImage.naturalHeight;
-  const boxes = groundingBoxes.querySelectorAll(".grounding-box");
+  const boxElements = groundingBoxes.querySelectorAll(".grounding-box");
 
-  groundingItems.forEach((item, index) => {
-    const box = boxes[index];
-    if (!box) return;
-    const coords = item.coords;
+  boxElements.forEach((box) => {
+    const itemIndex = Number.parseInt(box.dataset.item || "-1", 10);
+    const boxIndex = Number.parseInt(box.dataset.box || "-1", 10);
+    const item = groundingItems[itemIndex];
+    const coords = item?.boxes?.[boxIndex];
+    if (!coords) return;
     const boxCoords = normalizeBoxCoords(
       coords,
       groundingImage.naturalWidth,
-      groundingImage.naturalHeight,
-      mapping
+      groundingImage.naturalHeight
     );
     const left = boxCoords.x1 * scaleX;
     const top = boxCoords.y1 * scaleY;
@@ -211,86 +137,75 @@ function updateGroundingBoxes() {
   });
 }
 
-function normalizeBoxCoords(coords, imageWidth, imageHeight, mapping) {
-  let xs = [];
-  let ys = [];
-  if (coords.length >= 8) {
-    for (let i = 0; i < coords.length; i += 2) {
-      xs.push(coords[i]);
-      ys.push(coords[i + 1]);
+function normalizeBoxCoords(coords, imageWidth, imageHeight) {
+  const x1 = coords[0];
+  const y1 = coords[1];
+  const x2 = coords[2];
+  const y2 = coords[3];
+  const maxVal = Math.max(x1, y1, x2, y2);
+
+  if (maxVal <= 1.5) {
+    return {
+      x1: x1 * imageWidth,
+      y1: y1 * imageHeight,
+      x2: x2 * imageWidth,
+      y2: y2 * imageHeight,
+    };
+  }
+  if (maxVal <= 100) {
+    return {
+      x1: (x1 / 100) * imageWidth,
+      y1: (y1 / 100) * imageHeight,
+      x2: (x2 / 100) * imageWidth,
+      y2: (y2 / 100) * imageHeight,
+    };
+  }
+  if (maxVal <= 1200) {
+    return {
+      x1: (x1 / 999) * imageWidth,
+      y1: (y1 / 999) * imageHeight,
+      x2: (x2 / 999) * imageWidth,
+      y2: (y2 / 999) * imageHeight,
+    };
+  }
+  return { x1, y1, x2, y2 };
+}
+
+function parseDetBoxes(detText) {
+  if (!detText) return [];
+  const raw = detText.trim();
+  let parsed;
+  try {
+    parsed = JSON.parse(raw);
+  } catch (err) {
+    parsed = null;
+  }
+
+  let boxes = [];
+  if (Array.isArray(parsed)) {
+    if (Array.isArray(parsed[0])) {
+      boxes = parsed;
+    } else {
+      for (let i = 0; i + 3 < parsed.length; i += 4) {
+        boxes.push(parsed.slice(i, i + 4));
+      }
     }
   } else {
-    const ax1 = coords[0];
-    const ay1 = coords[1];
-    const ax2 = coords[2];
-    const ay2 = coords[3];
-
-    const cand1 = {
-      x1: Math.min(ax1, ax2),
-      y1: Math.min(ay1, ay2),
-      x2: Math.max(ax1, ax2),
-      y2: Math.max(ay1, ay2),
-    };
-    const cand2 = {
-      x1: Math.min(ay1, ay2),
-      y1: Math.min(ax1, ax2),
-      x2: Math.max(ay1, ay2),
-      y2: Math.max(ax1, ax2),
-    };
-    const w1 = cand1.x2 - cand1.x1;
-    const h1 = cand1.y2 - cand1.y1;
-    const w2 = cand2.x2 - cand2.x1;
-    const h2 = cand2.y2 - cand2.y1;
-    const ratio1 = h1 > 0 ? w1 / h1 : 0;
-    const ratio2 = h2 > 0 ? w2 / h2 : 0;
-    const chosen = ratio1 >= ratio2 ? cand1 : cand2;
-    xs = [chosen.x1, chosen.x2];
-    ys = [chosen.y1, chosen.y2];
-  }
-  let x1 = Math.min(...xs);
-  let x2 = Math.max(...xs);
-  let y1 = Math.min(...ys);
-  let y2 = Math.max(...ys);
-
-  const maxVal = Math.max(x2, y2);
-  let baseSize = mapping?.baseSize;
-  let spaceType = mapping?.spaceType;
-
-  if (!spaceType) {
-    if (maxVal <= 1.5) {
-      spaceType = "normalized";
-      baseSize = 1;
-    } else if (maxVal <= 100) {
-      spaceType = "percent";
-      baseSize = 100;
-    } else if (maxVal <= 1200) {
-      spaceType = "bins1000";
-      baseSize = 1000;
-    } else {
-      spaceType = "pixel";
-      baseSize = maxVal;
+    const coords = raw
+      .replace(/[\[\]]/g, "")
+      .split(/[,\s]+/)
+      .filter((value) => value.length > 0)
+      .map((value) => Number.parseFloat(value))
+      .filter((value) => Number.isFinite(value));
+    for (let i = 0; i + 3 < coords.length; i += 4) {
+      boxes.push(coords.slice(i, i + 4));
     }
   }
 
-  if (mapping?.mode === "letterbox") {
-    if (spaceType === "normalized" || spaceType === "percent" || spaceType === "bins1000") {
-      x1 = (x1 / baseSize) * mapping.baseSize;
-      x2 = (x2 / baseSize) * mapping.baseSize;
-      y1 = (y1 / baseSize) * mapping.baseSize;
-      y2 = (y2 / baseSize) * mapping.baseSize;
-    }
-    x1 = (x1 - mapping.padX) / mapping.scale;
-    x2 = (x2 - mapping.padX) / mapping.scale;
-    y1 = (y1 - mapping.padY) / mapping.scale;
-    y2 = (y2 - mapping.padY) / mapping.scale;
-  } else if (spaceType === "normalized" || spaceType === "percent" || spaceType === "bins1000") {
-    x1 = (x1 / baseSize) * imageWidth;
-    x2 = (x2 / baseSize) * imageWidth;
-    y1 = (y1 / baseSize) * imageHeight;
-    y2 = (y2 / baseSize) * imageHeight;
-  }
-
-  return { x1, y1, x2, y2 };
+  return boxes
+    .map((box) => box.map((value) => Number.parseFloat(value)).filter((value) => Number.isFinite(value)))
+    .filter((box) => box.length >= 4)
+    .map((box) => box.slice(0, 4));
 }
 
 function setActiveGrounding(index) {
@@ -298,8 +213,8 @@ function setActiveGrounding(index) {
   groundingList.querySelectorAll(".grounding-item").forEach((item, idx) => {
     item.classList.toggle("active", idx === index);
   });
-  groundingBoxes.querySelectorAll(".grounding-box").forEach((box, idx) => {
-    box.classList.toggle("active", idx === index);
+  groundingBoxes.querySelectorAll(".grounding-box").forEach((box) => {
+    box.classList.toggle("active", Number.parseInt(box.dataset.item || "-1", 10) === index);
   });
 }
 
@@ -327,9 +242,13 @@ function renderGroundingModal() {
     });
     groundingList.appendChild(card);
 
-    const box = document.createElement("div");
-    box.className = "grounding-box";
-    groundingBoxes.appendChild(box);
+    item.boxes.forEach((_, boxIndex) => {
+      const box = document.createElement("div");
+      box.className = "grounding-box";
+      box.dataset.item = String(index);
+      box.dataset.box = String(boxIndex);
+      groundingBoxes.appendChild(box);
+    });
   });
 
   if (activeGroundingIndex >= 0) {
@@ -346,6 +265,7 @@ function openGroundingModal() {
   document.body.classList.add("modal-open");
   groundingImage.src = currentImage || "";
   renderGroundingModal();
+  updateFullscreenButton();
   if (groundingImage.complete) {
     updateGroundingBoxes();
   }
@@ -355,6 +275,23 @@ function closeGroundingModal() {
   groundingModal.classList.remove("open");
   groundingModal.setAttribute("aria-hidden", "true");
   document.body.classList.remove("modal-open");
+}
+
+function updateFullscreenButton() {
+  const isFullscreen = document.fullscreenElement === groundingModal.querySelector(".modal-card");
+  fullscreenBtn.textContent = isFullscreen ? "退出全屏" : "全屏显示";
+}
+
+function toggleFullscreen() {
+  const modalCard = groundingModal.querySelector(".modal-card");
+  if (!modalCard) return;
+  if (document.fullscreenElement) {
+    document.exitFullscreen().catch(() => {});
+    return;
+  }
+  modalCard.requestFullscreen().catch(() => {
+    alert("无法进入全屏模式");
+  });
 }
 
 function updateFileInfo(file) {
@@ -574,6 +511,8 @@ downloadBtn.addEventListener("click", downloadOutput);
 clearBtn.addEventListener("click", clearOutput);
 locateBtn.addEventListener("click", openGroundingModal);
 closeGrounding.addEventListener("click", closeGroundingModal);
+fullscreenBtn.addEventListener("click", toggleFullscreen);
+document.addEventListener("fullscreenchange", updateFullscreenButton);
 groundingModal.addEventListener("click", (event) => {
   if (event.target?.dataset?.close) {
     closeGroundingModal();
