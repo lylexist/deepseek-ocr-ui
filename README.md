@@ -2,6 +2,8 @@
 
 A lightweight, browser-based UI for running DeepSeek OCR via an Ollama-compatible endpoint. Upload an image, run OCR, and inspect grounding boxes with a visual overlay.
 
+![Web demo](./src/img/demo.png)
+
 ## Quick Start
 
 ```bash
